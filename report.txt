@@ -1,0 +1,4 @@
+You must include a report (max 1500 words) which describes your approach towards
+the design of your classes, interfaces and error handling. The report should discuss
+how you envisaged the end user using your application, how you decided between
+alternatives. Include UML class diagrams to discuss your system architecture.
