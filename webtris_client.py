@@ -9,8 +9,16 @@ class TrafficObservation:
         self.avg_mph=avg_mph
         self.total_volume=total_volume
 
-    def is_valid(self)->bool:
-        return self.avg_mph is not None and self.total_volume is not None
+    def is_valid(self) -> bool:
+        if self.avg_mph is None or self.total_volume is None:
+            return False
+            
+        try:
+            float(self.avg_mph) 
+            int(self.total_volume)
+            return True
+        except (ValueError, TypeError):
+            return False
     
     def __lt__(self, other):
         if(self.time_period_ending<other.time_period_ending):
@@ -52,7 +60,12 @@ class WebtrisAPI():
         
         print(f"DEBUG: Contacting API for Site {site_id}...")
         response = requests.get(self.BASE_URL, params=payload, timeout=20)
+        #print(f"DEBUG: The full URL being called is: {response.url}")
         print(f"DEBUG: Received Response with Status {response.status_code}")
+
+        if response.status_code == 204:
+            print("No data available for this site/date combination.")
+            return []  # Return an empty list so the Site class doesn't crash
         
         if response.status_code != 200:
             response.raise_for_status()
@@ -69,55 +82,63 @@ class Site():
         self.site_id = site_id
         self.site_name = site_name
         self.observations: list[TrafficObservation] = []
+    
+    def __iter__(self):
+        return iter(self.observations)
 
     def fetch_data(self, api_client: WebtrisAPI, date: str) -> None:
         self.observations = api_client.ResponseParser(self.site_id, date)
         self.observations.sort() #sorts based on date because that's how the __lt__ is defined :D
 
-    def get_total_volume(self) -> int:  
-        total = 0
-        for obs in self.observations:
-            if obs.is_valid() and obs.total_volume is not None:
-                total += obs.total_volume
-        return total
+    def __len__(self) -> int:
+        return len(self.observations) #number of records
+    
+    def get_records_for_hour(self, hour: str) -> list[TrafficObservation]:
+        if len(hour) == 1:
+            target = "0" + hour
+        else:
+            target = hour 
+        return [obs for obs in self.observations if obs.time_period_ending.startswith(target)]
+
+    def _calculate_total_volume(self, records: list[TrafficObservation]) -> int:
+        return sum(obs.total_volume for obs in records if obs.is_valid() and obs.total_volume is not None)
+        
+    def _calculate_average_speed(self, records: list[TrafficObservation]) -> float:
+        valid_speeds = [obs.avg_mph for obs in records if obs.is_valid() and obs.avg_mph is not None]
+        if not valid_speeds:
+            return 0.0
+        return sum(valid_speeds) / len(valid_speeds)
+    
+    def get_total_volume(self) -> int:
+        return self._calculate_total_volume(self.observations)
+
+    def get_total_volume_hour(self, hour: str) -> int:
+        hour_records = self.get_records_for_hour(hour)
+        return self._calculate_total_volume(hour_records)
 
     def get_average_speed(self) -> float:
-        total_speed = 0.0
-        count = 0
+        return self._calculate_average_speed(self.observations)
 
-        for obs in self.observations:
-            if obs.is_valid() and obs.avg_mph is not None:
-                total_speed += obs.avg_mph
-                count += 1
-
-        if count == 0:
-            return 0.0
-            
-        return total_speed / count
+    def get_average_speed_hour(self, hour: str) -> float:
+        hour_records = self.get_records_for_hour(hour)
+        return self._calculate_average_speed(hour_records)
     
     def get_peak_hour(self) -> str:
-        valid_hours = {}
+        hourly_totals = {}
+        for h in range(24):
+            hour_str = str(h)
+            if len(hour_str) == 1:
+                hour_str = "0" + hour_str
+            hourly_totals[hour_str] = self.get_total_volume_hour(hour_str)
+        
         max_vol = -1
         peak_hour = "00"
-
-        #builds a dictornary lumping each 15 min inverval into hours so we can find the volume per hour rather than per 15 mins
-        for obs in self.observations:
-            if obs.is_valid() and obs.total_volume is not None:
-                hour = obs.time_period_ending.split(':')[0]
-                
-                if hour in valid_hours:
-                    valid_hours[hour] += obs.total_volume
-                else:
-                    valid_hours[hour] = obs.total_volume
-        
-        #find the max
-        for hr, vol in valid_hours.items():
+        for hr, vol in hourly_totals.items():
             if vol > max_vol:
                 max_vol = vol
                 peak_hour = hr
+        return peak_hour
 
-        return f"{peak_hour}:00"
-    
     def __str__(self) -> str:
         vol = self.get_total_volume()
         avg = self.get_average_speed()
